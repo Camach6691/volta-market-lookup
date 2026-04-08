@@ -453,7 +453,7 @@ with tab_browse:
                   "E": "background-color:#f3e8ff;color:#6b21a8;font-weight:700"}
         return colors.get(val, "")
 
-    styled = tbl.style.applymap(color_tier, subset=["Tier"])
+    styled = tbl.style.map(color_tier, subset=["Tier"])
     st.dataframe(styled, height=520, use_container_width=True)
     st.caption(f"Showing {len(tbl):,} markets (of {len(DF):,} total)")
 
@@ -465,3 +465,4 @@ with tab_browse:
         file_name="volta_markets_filtered.csv",
         mime="text/csv",
     )
+
