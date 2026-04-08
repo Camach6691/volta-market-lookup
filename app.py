@@ -346,7 +346,7 @@ with st.sidebar:
 # ─── Recalculate with current weights ─────────────────────────────────────────
 # Use cache keyed on weights + tier settings for speed
 @st.cache_data(show_spinner=False)
-def get_scored(weight_tuple, tier_tuple, _v=3):
+def get_scored(weight_tuple, tier_tuple, _v=4):
     w = dict(weight_tuple)
     t = dict(tier_tuple)
     df = recalculate(RAW, w, t)
@@ -371,11 +371,19 @@ tab_search, tab_browse = st.tabs(["🔍 Search by Address or Link", "📊 Browse
 
 # ─── TAB 1: Search ────────────────────────────────────────────────────────────
 with tab_search:
-    user_input = st.text_input(
-        label="",
-        placeholder="Paste a CoStar / Crexi link  —or—  type a city, address, or market name…",
-        label_visibility="collapsed",
-    )
+    col_input, col_clear = st.columns([6, 1])
+    with col_input:
+        user_input = st.text_input(
+            label="",
+            placeholder="Paste a CoStar / Crexi link  —or—  type a city, address, or market name…",
+            label_visibility="collapsed",
+            key="search_input",
+        )
+    with col_clear:
+        if user_input:
+            if st.button("✕ Clear", use_container_width=True):
+                st.session_state["search_input"] = ""
+                st.rerun()
     st.caption("Examples: 'Nashville, TN' · '2150 Market St, Denver, CO 80202' · https://crexi.com/properties/.../houston-tx-storage")
 
     def fmt(val, pct=False, dollar=False, k=False, d2=False):
@@ -496,8 +504,16 @@ with tab_search:
 
             for row in geocoded:
                 render_result(row)
+
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+            if st.button("← Back to map", use_container_width=False):
+                st.session_state["search_input"] = ""
+                st.rerun()
         else:
             st.markdown('<div class="no-results"><div style="font-size:2rem">🔍</div><div>No matches found — try a different city or MSA name</div></div>', unsafe_allow_html=True)
+            if st.button("← Back to map"):
+                st.session_state["search_input"] = ""
+                st.rerun()
 
     else:
         # Idle state: tier summary + national map
