@@ -252,7 +252,7 @@ with st.sidebar:
 # ─── Recalculate with current weights ─────────────────────────────────────────
 # Use cache keyed on weights + tier settings for speed
 @st.cache_data(show_spinner=False)
-def get_scored(weight_tuple, tier_tuple):
+def get_scored(weight_tuple, tier_tuple, _v=3):
     w = dict(weight_tuple)
     t = dict(tier_tuple)
     df = recalculate(RAW, w, t)
