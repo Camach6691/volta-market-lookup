@@ -283,13 +283,16 @@ with st.sidebar:
 
     raw_weights = {}
     for label, col, default, direction, desc in CRITERIA:
+        st.markdown(
+            f"<div style='font-size:0.82rem;color:#a8b8d4;margin-bottom:2px;'>"
+            f"{label} &nbsp;<span style='color:#4a9eff;font-size:0.75rem'>{direction}</span></div>",
+            unsafe_allow_html=True
+        )
         raw_weights[col] = st.slider(
-            f"{label}  `{direction}`",
-            min_value=0, max_value=50,
-            value=default,
-            step=1,
-            help=desc,
-            key=f"w_{col}",
+            label, min_value=0, max_value=50,
+            value=default, step=1,
+            help=desc, key=f"w_{col}",
+            label_visibility="collapsed",
         )
 
     total_raw = sum(raw_weights.values()) or 1
@@ -327,11 +330,12 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-    st.markdown("---")
-    if st.button("↺ Reset to defaults", use_container_width=True):
-        for label, col, default, *_ in CRITERIA:
+    def _reset_weights():
+        for _, col, default, *_ in CRITERIA:
             st.session_state[f"w_{col}"] = default
-        st.rerun()
+
+    st.markdown("---")
+    st.button("↺ Reset to defaults", use_container_width=True, on_click=_reset_weights)
 
 # ─── Recalculate with current weights ─────────────────────────────────────────
 # Use cache keyed on weights + tier settings for speed
