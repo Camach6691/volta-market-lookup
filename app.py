@@ -300,7 +300,7 @@ with tab_search:
         rank   = row.get("Rank")
         match_pct = int(row.get("_match", 0))
 
-        score_pct = float(score) * 100 if (score and not pd.isna(score)) else None
+        score_pct = float(score) * 100 if (score is not None and not pd.isna(score)) else None
         badge_cls = f"tier-{tier}" if tier in "ABCDE" else "tier-x"
 
         score_bar = ""
@@ -311,7 +311,7 @@ with tab_search:
                 f"<div class='score-bar-bg'><div class='score-bar-fill' style='width:{score_pct:.0f}%'></div></div>"
             )
 
-        rank_txt = f'<div style="font-size:0.8rem;color:#64748b;margin-top:4px;">Rank #{int(rank):,} of {DF["Rank"].notna().sum():,} ranked markets</div>' if (rank and not pd.isna(rank)) else ""
+        rank_txt = f'<div style="font-size:0.8rem;color:#64748b;margin-top:4px;">Rank #{int(rank):,} of {DF["Rank"].notna().sum():,} ranked markets</div>' if (rank is not None and not pd.isna(rank)) else ""
 
         chips = "".join(
             f'<div class="metric-chip">{k}: <span>{v}</span></div>'
@@ -465,4 +465,3 @@ with tab_browse:
         file_name="volta_markets_filtered.csv",
         mime="text/csv",
     )
-
