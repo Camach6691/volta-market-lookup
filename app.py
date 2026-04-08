@@ -368,10 +368,11 @@ with tab_search:
     )
     st.caption("Examples: 'Nashville, TN' · '2150 Market St, Denver, CO 80202' · https://crexi.com/properties/.../houston-tx-storage")
 
-    def fmt(val, pct=False, dollar=False, k=False):
+    def fmt(val, pct=False, dollar=False, k=False, d2=False):
         if val is None or (isinstance(val, float) and pd.isna(val)): return "—"
         try:
             if pct:    return f"{float(val)*100:.1f}%"
+            if d2:     return f"${float(val):,.2f}"
             if dollar: return f"${float(val):,.0f}"
             if k:      return f"{float(val)/1000:.0f}k SF"
             return str(val)
@@ -408,7 +409,7 @@ with tab_search:
         chips = "".join(
             f'<div class="metric-chip">{k}: <span>{v}</span></div>'
             for k, v in [
-                ("CC Rate/SF",   fmt(row.get("CC Rate"), dollar=True)),
+                ("CC Rate/SF",   fmt(row.get("CC Rate"), d2=True)),
                 ("SF/Capita",    fmt(row.get("SF/Cap")) + " sf"),
                 ("Med HHI",      fmt(row.get("Med HHI"), dollar=True)),
                 ("Sup Growth",   fmt(row.get("Sup Gr%"), pct=True)),
