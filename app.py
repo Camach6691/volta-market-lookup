@@ -9,6 +9,15 @@ import streamlit as st
 import pandas as pd
 from rapidfuzz import fuzz, process
 
+try:
+    from geopy.geocoders import Nominatim
+    from geopy.extra.rate_limiter import RateLimiter
+    import folium
+    from streamlit_folium import st_folium
+    GEO_AVAILABLE = True
+except ImportError:
+    GEO_AVAILABLE = False
+
 # ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Market Lookup · Volta Global",
@@ -176,20 +185,95 @@ def extract_from_address(text: str):
         return m2.group(1).strip(), m2.group(2).strip()
     return None, None
 
-def search_markets(query: str, df: pd.DataFrame, top_n=8):
+def search_markets(query: str, df: pd.DataFrame, top_n=8, state_hint=None):
+    seen, rows = set(), []
+
+    # Phase 1: prioritize in-state markets when a state is known
+    if state_hint:
+        in_state = df[df["ST"] == state_hint.upper()]
+        if len(in_state) >= 1:
+            choices = in_state["_search"].tolist()
+            hits = process.extract(query, choices, scorer=fuzz.WRatio, limit=top_n * 3)
+            for _, score, idx in hits:
+                if score < 25: continue
+                r = in_state.iloc[idx].copy()
+                key = r["Market"]
+                if key in seen: continue
+                seen.add(key)
+                r["_match"] = score
+                rows.append(r)
+            if len(rows) >= 3:
+                return rows[:top_n]
+
+    # Phase 2: national fallback (or if not enough in-state results)
     choices = df["_search"].tolist()
     hits = process.extract(query, choices, scorer=fuzz.WRatio, limit=top_n * 3)
-    seen, rows = set(), []
     for _, score, idx in hits:
         if score < 40: continue
-        row = df.iloc[idx].copy()
-        key = row["Market"]
-        if key not in seen:
-            seen.add(key)
-            row["_match"] = score
-            rows.append(row)
+        r = df.iloc[idx].copy()
+        key = r["Market"]
+        if key in seen: continue
+        seen.add(key)
+        r["_match"] = score
+        rows.append(r)
         if len(rows) >= top_n: break
     return rows
+
+# ─── Geocoding ────────────────────────────────────────────────────────────────
+if GEO_AVAILABLE:
+    @st.cache_resource
+    def _get_geocoder():
+        geo = Nominatim(user_agent="volta-global-market-lookup-v1")
+        return RateLimiter(geo.geocode, min_delay_seconds=1, error_wait_seconds=2)
+
+    @st.cache_data(show_spinner=False)
+    def geocode_place(place: str):
+        try:
+            loc = _get_geocoder()(place + ", USA")
+            if loc:
+                return float(loc.latitude), float(loc.longitude)
+        except Exception:
+            pass
+        return None, None
+else:
+    def geocode_place(place: str):
+        return None, None
+
+def haversine(lat1, lng1, lat2, lng2):
+    R = 3958.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+def render_map(input_lat, input_lng, geocoded_rows):
+    tier_colors = {"A":"green","B":"blue","C":"orange","D":"red","E":"lightgray"}
+    m = folium.Map(location=[input_lat, input_lng], zoom_start=8, tiles="CartoDB positron")
+    folium.Marker(
+        [input_lat, input_lng],
+        tooltip="Search Address",
+        popup="<b>Search Address</b>",
+        icon=folium.Icon(color="darkred", icon="map-marker", prefix="fa")
+    ).add_to(m)
+    for row in geocoded_rows:
+        lat, lng = row.get("_lat"), row.get("_lng")
+        if not lat or not lng: continue
+        tier  = str(row.get("Tier", "—"))
+        mkt   = row.get("Market", "")
+        score = row.get("Score")
+        dist  = row.get("_dist")
+        stxt  = f"Score: {float(score)*100:.1f}%<br>" if score and not pd.isna(score) else ""
+        dtxt  = f"{dist:.0f} mi away" if dist else ""
+        folium.CircleMarker(
+            [lat, lng],
+            radius=10,
+            color=tier_colors.get(tier,"gray"),
+            fill=True, fill_opacity=0.85,
+            tooltip=f"{mkt} — Tier {tier}",
+            popup=folium.Popup(f"<b>{mkt}</b><br>Tier {tier}<br>{stxt}{dtxt}", max_width=200),
+        ).add_to(m)
+    st_folium(m, width="100%", height=380, returned_objects=[])
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -376,11 +460,33 @@ with tab_search:
         if note: st.info(note)
 
         with st.spinner("Searching…"):
-            results = search_markets(query, DF)
+            results = search_markets(query, DF, state_hint=state)
 
         if results:
             st.markdown(f"#### Results for *{query}*")
-            for row in results:
+
+            # Geocode input + result markets for map
+            if GEO_AVAILABLE:
+                with st.spinner("Loading map…"):
+                    input_lat, input_lng = geocode_place(query)
+                    geocoded = []
+                    for row in results:
+                        r = dict(row) if not isinstance(row, dict) else row.copy()
+                        mkt = r.get("Market","")
+                        lat, lng = geocode_place(mkt)
+                        r["_lat"], r["_lng"] = lat, lng
+                        if input_lat and lat:
+                            r["_dist"] = haversine(input_lat, input_lng, lat, lng)
+                        geocoded.append(r)
+                    # Sort by distance if available
+                    if input_lat and any(r.get("_dist") for r in geocoded):
+                        geocoded.sort(key=lambda r: r.get("_dist", 9999))
+                    if input_lat:
+                        render_map(input_lat, input_lng, geocoded)
+            else:
+                geocoded = [dict(row) if not isinstance(row, dict) else row for row in results]
+
+            for row in geocoded:
                 render_result(row)
         else:
             st.markdown('<div class="no-results"><div style="font-size:2rem">🔍</div><div>No matches found — try a different city or MSA name</div></div>', unsafe_allow_html=True)
