@@ -101,44 +101,45 @@ DEFAULT_TIERS = {"A": 25, "B": 20, "C": 25, "D": 15}  # E = remainder
 def recalculate(df: pd.DataFrame, weights: dict, tier_pcts: dict) -> pd.DataFrame:
     """Recompute Score and Tier using custom weights.
 
-    Only rows that had a valid original score (complete data) are ranked.
-    This matches the Excel model exactly at default weights.
+    ALL markets are ranked. Missing score columns are filled with 0 (low penalty).
+    A '_missing' column tracks which criteria labels were absent for each row.
     """
     out = df.copy()
     total_w = sum(weights.values()) or 1
-
-    # A row is "rankable" if ALL score columns used with non-zero weight are present.
-    # We mirror the Excel: only rows with a pre-existing Score get ranked.
-    # When weights change, we include any row where the weighted columns are present.
     active_cols = [col for col in SCORE_COLS if weights.get(col, 0) > 0]
-    rankable = out[active_cols].notna().all(axis=1)
 
-    # Weighted composite score (only for rankable rows)
-    out["Score"] = float("nan")
-    out.loc[rankable, "Score"] = sum(
-        out.loc[rankable, col] * (weights[col] / total_w)
-        for col in active_cols
-    )
+    # Build a label map so we can show human-readable names for missing criteria
+    col_to_label = {c[1]: c[0] for c in CRITERIA}
 
-    # Rank within rankable set (1 = best)
-    ranked_scores = out.loc[rankable, "Score"]
-    out["Rank"] = pd.NA
-    out.loc[rankable, "Rank"] = ranked_scores.rank(ascending=False, method="min").astype("Int64")
+    # Track which criteria are missing per row
+    def get_missing(row):
+        missing = [col_to_label[c] for c in active_cols if pd.isna(row[c])]
+        return ", ".join(missing) if missing else ""
+    out["_missing"] = out.apply(get_missing, axis=1)
 
-    # Tier: percentile cutoffs applied only to rankable rows
-    n_valid = rankable.sum()
-    a_cut = math.ceil(n_valid * tier_pcts["A"] / 100)
-    b_cut = math.ceil(n_valid * (tier_pcts["A"] + tier_pcts["B"]) / 100)
-    c_cut = math.ceil(n_valid * sum([tier_pcts["A"], tier_pcts["B"], tier_pcts["C"]]) / 100)
-    d_cut = math.ceil(n_valid * sum(tier_pcts.values()) / 100)
+    # Fill missing scores with 0 (lowest possible score = penalty for missing data)
+    score_df = out[active_cols].fillna(0)
+
+    # Weighted composite score for ALL rows
+    out["Score"] = sum(score_df[col] * (weights[col] / total_w) for col in active_cols)
+
+    # Rank all rows (1 = best)
+    out["Rank"] = out["Score"].rank(ascending=False, method="min").astype("Int64")
+
+    # Tier: percentile cutoffs applied to all rows
+    n_total = len(out)
+    a_cut = math.ceil(n_total * tier_pcts["A"] / 100)
+    b_cut = math.ceil(n_total * (tier_pcts["A"] + tier_pcts["B"]) / 100)
+    c_cut = math.ceil(n_total * sum([tier_pcts["A"], tier_pcts["B"], tier_pcts["C"]]) / 100)
+    d_cut = math.ceil(n_total * sum(tier_pcts.values()) / 100)
 
     rank = out["Rank"]
-    out["Tier"] = "—"
-    out.loc[rankable & (rank <= a_cut), "Tier"] = "A"
-    out.loc[rankable & (rank > a_cut) & (rank <= b_cut), "Tier"] = "B"
-    out.loc[rankable & (rank > b_cut) & (rank <= c_cut), "Tier"] = "C"
-    out.loc[rankable & (rank > c_cut) & (rank <= d_cut), "Tier"] = "D"
-    out.loc[rankable & (rank > d_cut), "Tier"] = "E"
+    out["Tier"] = "E"
+    out.loc[rank <= a_cut, "Tier"] = "A"
+    out.loc[(rank > a_cut) & (rank <= b_cut), "Tier"] = "B"
+    out.loc[(rank > b_cut) & (rank <= c_cut), "Tier"] = "C"
+    out.loc[(rank > d_cut), "Tier"] = "E"
+    out.loc[(rank > c_cut) & (rank <= d_cut), "Tier"] = "D"
 
     return out
 
@@ -311,7 +312,14 @@ with tab_search:
                 f"<div class='score-bar-bg'><div class='score-bar-fill' style='width:{score_pct:.0f}%'></div></div>"
             )
 
-        rank_txt = f'<div style="font-size:0.8rem;color:#64748b;margin-top:4px;">Rank #{int(rank):,} of {DF["Rank"].notna().sum():,} ranked markets</div>' if (rank is not None and not pd.isna(rank)) else ""
+        rank_txt = f'<div style="font-size:0.8rem;color:#64748b;margin-top:4px;">Rank #{int(rank):,} of {len(DF):,} ranked markets</div>' if (rank is not None and not pd.isna(rank)) else ""
+
+        missing_data = row.get("_missing", "")
+        missing_txt = (
+            f'<div style="margin-top:8px;padding:6px 10px;background:#fffbeb;border:1px solid #fcd34d;'
+            f'border-radius:6px;font-size:0.78rem;color:#92400e;">'
+            f'⚠️ <strong>Incomplete data</strong> — scored 0 for: {missing_data}</div>'
+        ) if missing_data else ""
 
         chips = "".join(
             f'<div class="metric-chip">{k}: <span>{v}</span></div>'
@@ -341,6 +349,7 @@ with tab_search:
           </div>
           {score_bar}
           {rank_txt}
+          {missing_txt}
           <hr style="border:none;border-top:1px solid #f1f5f9;margin:10px 0">
           <div class="metric-grid">{chips}</div>
         </div>
