@@ -80,10 +80,16 @@ st.markdown("""
 @st.cache_data
 def load_raw():
     df = pd.read_csv("data/sub_markets.csv")
-    # Score columns
     score_cols = ["Sc:Rate","Sc:Sat","Sc:HHI","Sc:Grw","Sc:Tax","Sc:Crm","Sc:Bas","Sc:Exit"]
     for c in score_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
+    # Merge pre-computed coordinates
+    try:
+        geo = pd.read_csv("data/markets_geo.csv")[["Market","ST","lat","lng"]]
+        df = df.merge(geo, on=["Market","ST"], how="left")
+    except Exception:
+        df["lat"] = None
+        df["lng"] = None
     return df
 
 RAW = load_raw()
@@ -470,26 +476,23 @@ with tab_search:
         if results:
             st.markdown(f"#### Results for *{query}*")
 
-            # Geocode input + result markets for map
+            # Build geocoded result list using pre-computed coords + geocode input address
+            geocoded = []
+            for row in results:
+                r = dict(row) if not isinstance(row, dict) else row.copy()
+                r["_lat"] = r.get("lat")
+                r["_lng"] = r.get("lng")
+                geocoded.append(r)
+
             if GEO_AVAILABLE:
-                with st.spinner("Loading map…"):
+                with st.spinner("Locating address…"):
                     input_lat, input_lng = geocode_place(query)
-                    geocoded = []
-                    for row in results:
-                        r = dict(row) if not isinstance(row, dict) else row.copy()
-                        mkt = r.get("Market","")
-                        lat, lng = geocode_place(mkt)
-                        r["_lat"], r["_lng"] = lat, lng
-                        if input_lat and lat:
-                            r["_dist"] = haversine(input_lat, input_lng, lat, lng)
-                        geocoded.append(r)
-                    # Sort by distance if available
-                    if input_lat and any(r.get("_dist") for r in geocoded):
-                        geocoded.sort(key=lambda r: r.get("_dist", 9999))
-                    if input_lat:
-                        render_map(input_lat, input_lng, geocoded)
-            else:
-                geocoded = [dict(row) if not isinstance(row, dict) else row for row in results]
+                if input_lat:
+                    for r in geocoded:
+                        if r["_lat"] and r["_lng"]:
+                            r["_dist"] = haversine(input_lat, input_lng, r["_lat"], r["_lng"])
+                    geocoded.sort(key=lambda r: r.get("_dist", 9999))
+                    render_map(input_lat, input_lng, geocoded)
 
             for row in geocoded:
                 render_result(row)
@@ -497,15 +500,11 @@ with tab_search:
             st.markdown('<div class="no-results"><div style="font-size:2rem">🔍</div><div>No matches found — try a different city or MSA name</div></div>', unsafe_allow_html=True)
 
     else:
-        # Idle state: tier summary using current weights
-        col1, col2, col3, col4, col5 = st.columns(5)
-        for col, tier, bg, fg in [
-            (col1, "A", "#d1fae5", "#065f46"),
-            (col2, "B", "#dbeafe", "#1e40af"),
-            (col3, "C", "#fef3c7", "#92400e"),
-            (col4, "D", "#ffe4e6", "#9f1239"),
-            (col5, "E", "#f3e8ff", "#6b21a8"),
-        ]:
+        # Idle state: tier summary + national map
+        tier_cfg = [("A","#d1fae5","#065f46"),("B","#dbeafe","#1e40af"),
+                    ("C","#fef3c7","#92400e"),("D","#ffe4e6","#9f1239"),("E","#f3e8ff","#6b21a8")]
+        cols = st.columns(5)
+        for (tier, bg, fg), col in zip(tier_cfg, cols):
             n = (DF["Tier"] == tier).sum()
             with col:
                 st.markdown(
@@ -516,6 +515,40 @@ with tab_search:
                     unsafe_allow_html=True
                 )
         st.caption("← Adjust weights in the sidebar — tier counts update in real time")
+
+        # National map of all markets
+        if GEO_AVAILABLE:
+            st.markdown("#### 🗺️ All Markets")
+            tier_hex = {"A":"#22c55e","B":"#3b82f6","C":"#f59e0b","D":"#ef4444","E":"#9ca3af"}
+            map_df = DF[DF["lat"].notna() & DF["lng"].notna()].copy()
+            m = folium.Map(location=[39.5, -98.5], zoom_start=4, tiles="CartoDB positron")
+            from folium.plugins import MarkerCluster
+            cluster = MarkerCluster(
+                options={"maxClusterRadius": 40, "disableClusteringAtZoom": 9}
+            ).add_to(m)
+            for _, row in map_df.iterrows():
+                tier  = str(row.get("Tier","E"))
+                score = row.get("Score")
+                stxt  = f"Score: {float(score)*100:.1f}%<br>" if score and not pd.isna(score) else ""
+                color = tier_hex.get(tier, "#9ca3af")
+                folium.CircleMarker(
+                    location=[row["lat"], row["lng"]],
+                    radius=7, color=color, fill=True, fill_opacity=0.8,
+                    tooltip=f"{row['Market']} — Tier {tier}",
+                    popup=folium.Popup(
+                        f"<b>{row['Market']}</b><br>Tier {tier}<br>{stxt}{row.get('MSA','')}",
+                        max_width=220
+                    ),
+                ).add_to(cluster)
+            # Legend
+            legend_html = "".join(
+                f"<span style='background:{c};border-radius:50%;display:inline-block;"
+                f"width:12px;height:12px;margin-right:4px;'></span>Tier {t} &nbsp;"
+                for t, c in tier_hex.items()
+            )
+            st.markdown(f"<div style='font-size:0.82rem;margin-bottom:6px;'>{legend_html}</div>",
+                        unsafe_allow_html=True)
+            st_folium(m, width="100%", height=500, returned_objects=[])
 
 # ─── TAB 2: Browse ───────────────────────────────────────────────────────────
 with tab_browse:
